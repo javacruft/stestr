@@ -25,6 +25,8 @@ from six import StringIO
 import subunit as subunit_lib
 import testtools
 
+from stestr.commands import list as list_cmd
+from stestr.commands import run
 from stestr.tests import base
 
 
@@ -57,6 +59,24 @@ class TestReturnCodes(base.TestCase):
         os.chdir(self.directory)
         subprocess.call('stestr init', shell=True)
 
+    def _check_subunit(self, output_stream):
+        stream = subunit_lib.ByteStreamToStreamResult(output_stream)
+        starts = testtools.StreamResult()
+        summary = testtools.StreamSummary()
+        tests = []
+
+        def _add_dict(test):
+            tests.append(test)
+
+        outcomes = testtools.StreamToDict(functools.partial(_add_dict))
+        result = testtools.CopyStreamResult([starts, outcomes, summary])
+        result.startTestRun()
+        try:
+            stream.run(result)
+        finally:
+            result.stopTestRun()
+        self.assertThat(len(tests), testtools.matchers.GreaterThan(0))
+
     def assertRunExit(self, cmd, expected, subunit=False, stdin=None):
         if stdin:
             p = subprocess.Popen(
@@ -78,22 +98,7 @@ class TestReturnCodes(base.TestCase):
                              "Expected return code: %s doesn't match actual "
                              "return code of: %s" % (expected, p.returncode))
             output_stream = io.BytesIO(out)
-            stream = subunit_lib.ByteStreamToStreamResult(output_stream)
-            starts = testtools.StreamResult()
-            summary = testtools.StreamSummary()
-            tests = []
-
-            def _add_dict(test):
-                tests.append(test)
-
-            outcomes = testtools.StreamToDict(functools.partial(_add_dict))
-            result = testtools.CopyStreamResult([starts, outcomes, summary])
-            result.startTestRun()
-            try:
-                stream.run(result)
-            finally:
-                result.stopTestRun()
-            self.assertThat(len(tests), testtools.matchers.GreaterThan(0))
+            self._check_subunit(output_stream)
 
     def test_parallel_passing(self):
         self.assertRunExit('stestr run passing', 0)
@@ -199,3 +204,48 @@ class TestReturnCodes(base.TestCase):
         stream = self._get_cmd_stdout(
             'stestr last --subunit')[0]
         self.assertRunExit('stestr load', 0, stdin=stream)
+
+    def test_parallel_passing_from_func(self):
+        self.assertEqual(0, run.run_command(filters=['passing']))
+
+    def test_parallel_passing_bad_regex_from_func(self):
+        self.assertEqual(1, run.run_command(filters=['bad.regex.foobar']))
+
+    def test_parallel_fails_from_func(self):
+        self.assertEqual(1, run.run_command())
+
+    def test_serial_passing_from_func(self):
+        self.assertEqual(0, run.run_command(filters=['passing'], serial=True))
+
+    def test_serial_fails_from_func(self):
+        self.assertEqual(1, run.run_command(serial=True))
+
+    def test_serial_subunit_passing_from_func(self):
+        stdout = io.BytesIO()
+        self.assertEqual(0, run.run_command(subunit_out=True, serial=True,
+                                            filters=['passing'],
+                                            stdout=stdout))
+        stdout.seek(0)
+        self._check_subunit(stdout)
+
+    def test_parallel_subunit_passing_from_func(self):
+        stdout = io.BytesIO()
+        self.assertEqual(0, run.run_command(subunit_out=True,
+                                            filters=['passing'],
+                                            stdout=stdout))
+        stdout.seek(0)
+        self._check_subunit(stdout)
+
+    def test_until_failure_fails_from_func(self):
+        self.assertEqual(1, run.run_command(until_failure=True))
+
+    def test_until_failure_with_subunit_fails_from_func(self):
+        stdout = io.BytesIO()
+        self.assertEqual(1, run.run_command(until_failure=True,
+                                            subunit_out=True,
+                                            stdout=stdout))
+        stdout.seek(0)
+        self._check_subunit(stdout)
+
+    def test_list_from_func(self):
+        self.assertEqual(0, list_cmd.list_command())
